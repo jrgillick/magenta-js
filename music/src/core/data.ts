@@ -52,6 +52,17 @@ export const DEFAULT_DRUM_PITCH_CLASSES: number[][] = [
   [51, 52, 53, 59, 82]
 ];
 
+export const DRUM_LIST: string[] = ['kick', 'snare', 'closed_hh', 'open_hh', 'low_tom',
+             'mid_tom', 'hi_tom', 'crash', 'ride']
+export const DRUM_LIST_SMALL: string[] = ['kick', 'snare', 'closed_hh', 'open_hh']
+export const DRUM_LIST_SMALL_MAPPING = {
+  kick: ['kick'],
+  snare: ['snare', 'low_tom', 'mid_tom', 'hi_tom'],
+  closed_hh: ['closed_hh', 'ride'],
+  open_hh: ['open_hh', 'crash']
+}
+
+
 export interface MelodyConverterSpec {
   type: 'MelodyConverter';
   args: MelodyConverterArgs;
@@ -75,6 +86,11 @@ export interface DrumsOneHotConverterSpec {
 export interface MultitrackConverterSpec {
   type: 'MultitrackConverter';
   args: MultitrackConverterArgs;
+}
+
+export interface GrooveConverterSpec {
+  type: 'GrooveConverter';
+  args; GrooveConverterArgs;
 }
 
 /**
@@ -108,6 +124,8 @@ export function converterFromSpec(spec: ConverterSpec): DataConverter {
       return new DrumsOneHotConverter(spec.args);
     case 'MultitrackConverter':
       return new MultitrackConverter(spec.args);
+    case 'GrooveConverter':
+      return new GrooveConverter(spec.args);
     default:
       throw new Error(`Unknown DataConverter type: ${spec}`);
   }
@@ -799,4 +817,142 @@ export class MultitrackConverter extends DataConverter {
 
     return noteSequence;
   }
+}
+
+/** Converts to and from hit/velocity/offset representations.
+
+* In this setting, we represent drum sequences and performances
+* as triples of (hit, velocity, offset). Each timestep refers to a fixed beat
+* on a grid, which is by default spaced at 16th notes.  Drum hits that don't
+* fall exactly on beat are represented through the offset value, which refers
+* to the relative distance from the nearest quantized step.
+*
+* Hits are binary [0, 1].
+* Velocities are continuous values in [0, 1].
+* Offsets are continuous values in [-0.5, 0.5], rescaled to [-1, 1] for tensors.
+*
+* Each timestep contains this representation for each of a fixed list of
+* drum categories, which by default is the list of 9 categories defined in
+* drums_encoder_decoder.py.  With the default categories, the input and output
+* at a single timestep is of length 9x3 = 27. So a single measure of drums
+* at a 16th note grid is a matrix of shape (16, 27).
+*
+* @param splitBars Optional size of window to slide over full converted tensor.
+* @param stepsPerQuarter The number of quantization steps per quarter note.
+* @param quartersPerBar The number of quarter notes per bar.
+* @param humanize If True, flatten all input velocities and microtiming. The model
+* then learns to map from a flattened input to the original sequence.
+* @param tapify: If True, squash all drums at each timestep to the hi-hat channel.
+* @param addInstruments: A list of strings matching drums in DRUM_LIST.
+* These drums are removed from the inputs but not the outputs.
+* @param genreConditioningList: A list of strings that comprise the allowed values
+* for genre conditioning.
+* @param numVelocityBins: The number of bins to use for representing velocity as
+* one-hots.  If not defined, the converter will use continuous values.
+* @param numOffsetBins: The number of bins to use for representing timing offsets
+* as one-hots.  If not defined, the converter will use continuous values.
+* @param splitInstruments: Whether to produce outputs for each drum at a given
+* timestep across multiple steps of the model output. With 9 drums, this
+* makes the sequence 9 times as long. A one-hot control sequence is also
+* created to identify which instrument is to be output at each step.
+* @param hopSize: Number of steps to slide window.
+* @param hitsAsControls: If True, pass in hits with the conditioning controls
+* to force model to learn velocities and offsets.
+* @param smallDrumSet: If True, use MIDI pitch mappings for 4 instruments only
+* (kick, snare, closed hi-hat, open hi-hat) instead of the default 9.
+* @param fixedVelocities: If True, flatten all input velocities.
+*/
+export interface GrooveConverterArgs extends BaseConverterArgs {
+  splitBars: number
+  stepsPerQuarter: number;
+  quartersPerBar: number;
+  humanize: boolean;
+  tapify: boolean;
+  addInstruments: boolean;
+  genreConditioningList: string[];
+  numVelocityBins: number;
+  numOffsetBins: number;
+  splitInstruments: boolean;
+  hopSize: number;
+  hitsAsControls: boolean;
+  smallDrumSet: boolean;
+  fixedVelocities: boolean;
+}
+export class GrooveConverter extends DataConverter {
+  //readonly splitBars: number;
+  readonly stepsPerQuarter: number;
+  readonly quartersPerBar: number;
+  readonly stepsPerBar: number;
+  readonly humanize: boolean;
+  readonly tapify: boolean;
+  //readonly addInstruments: boolean;
+  //readonly genreConditioningList: string[];
+  //readonly numVelocityBins: number;
+  //readonly numOffsetBins: number;
+  //readonly categoricalOutputs: boolean;
+  //readonly splitInstruments: boolean;
+  //readonly hopSize: number;
+  //readonly hitsAsControls: boolean;
+  //readonly smallDrumSet: boolean;
+  //readonly fixedVelocities: boolean;
+  readonly drumList: string[];
+  readonly nDrums: number;
+  readonly defaultDrumPitches: hash;
+
+  constructor(args: GrooveConverterArgs) {
+    super(args);
+
+    //this.splitBars = args.splitBars;
+    this.stepsPerQuarter = args.stepsPerQuarter;
+    this.stepsPerBar = args.stepsPerQuarter * args.quartersPerBar;
+
+    this.humanize = args.humanize;
+    this.tapify = args.tapify;
+    //this.addInstruments = args.addInstruments;
+    //this.fixedVelocities = args.fixedVelocities;
+    //this.numVelocityBins = args.numVelocityBins;
+    //this.numOffsetBins = args.numOffsetBins;
+    //this.categoricalOutputs = (args.numVelocityBins != 0  && args.numOffsetBins != 0);
+    //this.splitInstruments = args.splitInstruments;
+    //this.hopSize = args.hopSize;
+    //this.hitsAsControls = args.hitsAsControls;
+
+    this.drumList = args.smallDrumSet ? DRUM_LIST_SMALL : DRUM_LIST;
+    this.nDrums = this.drumList.length
+
+    //const drumsPerOutput = this.splitInstruments ? 1 : this.nDrums
+    const drumsPerOutput = this.nDrums
+
+    // Each drum hit is represented by 3 numbers - on/off, velocity, and offset
+    const outputDepth = this.nDrums * 3
+
+    // By default output the first pitch from each set of drum mappings
+    this.defaultDrumPitches = {}
+    for (let i = 0; i < DEFAULT_DRUM_PITCH_CLASSES.length; ++i) {
+      this.defaultDrumPitches[DRUM_LIST[i]] = DEFAULT_DRUM_PITCH_CLASSES[i][0]
+    }
+
+    // Set mappings from drum names to default pitch lists
+    this.drumInstruments = {}
+    for (let i = 0; i < DRUM_LIST.length; ++i) {
+      this.drumInstruments[DRUM_LIST[i]] = DEFAULT_DRUM_PITCH_CLASSES[i]
+    }
+
+    // Map kick to 0, snare to 1, etc.
+    this.reverseDrumIndexMap = {}
+    for (let i = 0; i < this.drumList.length; ++i) {
+      this.reverseDrumIndexMap[this.drumList[i]] = i
+    }
+
+    // Skipping 9 to 4 drum mapping
+    // Skipping controls
+
+    toTensor(noteSequence: INoteSequence) {
+    
+    }
+
+    this.toNoteSequence {
+
+    }
+    
 }

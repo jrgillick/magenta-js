@@ -56,6 +56,26 @@ DRUM_NS.notes.forEach(n => {
 });
 DRUM_NS.totalQuantizedSteps = 32;
 
+const GROOVE_NS = NoteSequence.create({
+  notes: [
+    {pitch: 36, quantizedStartStep: 0}, {pitch: 42, quantizedStartStep: 0},
+    {pitch: 42, quantizedStartStep: 2,
+    {pitch: 38, quantizedStartStep: 4}, {pitch: 42, quantizedStartStep: 4},
+    {pitch: 42, quantizedStartStep: 6},
+    {pitch: 36, quantizedStartStep: 8}, {pitch: 36, quantizedStartStep: 8},
+    {pitch: 42, quantizedStartStep: 10},
+    {pitch: 38, quantizedStartStep: 12}, {pitch: 42, quantizedStartStep: 12},
+    {pitch: 42, quantizedStartStep: 14}
+  ],
+  quantizationInfo: {stepsPerQuarter: 4}
+});
+GROOVE_NS.notes.forEach(n => {
+  n.isDrum = true;
+  n.quantizedEndStep = (n.quantizedStartStep as number) + 1;
+});
+DRUM_NS.totalQuantizedSteps = 16;
+
+
 const TRIO_NS = NoteSequence.create();
 TRIO_NS.quantizationInfo =
     NoteSequence.QuantizationInfo.create({stepsPerQuarter: 2});
@@ -258,5 +278,20 @@ test('Test MultitrackConverter', (t: test.Test) => {
       .then(ns => t.deepEqual(ns, MULTITRACK_NS));
 
   multitrackTensor.dispose();
+  t.end();
+});
+
+test('Test GrooveConverter', (t: test.Test) => {
+  const grooveConverter = new data.GrooveConverter({
+    'stepsPerQuarter': 4,
+    'quartersPerBar': 4
+  });
+
+  const grooveTensor = grooveConverter.toTensor(GROOVE_NS);
+
+  grooveConverter.toNoteSequence(grooveTensor, 1)
+      .then(ns => t.deepEqual(ns, GROOVE_NS));
+
+  grooveTensor.dispose();
   t.end();
 });
